@@ -83,6 +83,30 @@ seg = ChaidSegmenter.from_parquet("loan_book.parquet", "dpd90", predictors, posi
 A runnable, self-contained demo lives at
 [`examples/dpd_segmentation.py`](examples/dpd_segmentation.py).
 
+### You don't have to spell out every predictor
+
+`predictors` accepts three forms — pick whichever is least effort:
+
+```python
+# 1. Full control: a spec (or method string) per column
+predictors={"age": {"method": "target", "max_bins": 4}, "region": "nominal"}
+
+# 2. Just the column names — the method is inferred from each column's dtype
+#    (numeric -> default_numeric_method, non-numeric -> nominal)
+predictors=["age", "income", "region", "bank"]
+
+# 3. Omit it entirely — auto-select every column except the target/weight
+ChaidSegmenter(target="dpd90", positive_class=1).fit(df)
+```
+
+In full-auto mode, constant columns and high-cardinality text columns (IDs, names,
+free text — anything with more than `max_nominal_cardinality` distinct values) are
+skipped automatically. You can always mix inference with overrides — e.g.
+`{"age": "auto", "score": {"method": "manual", "edges": [550, 650]}}` — and inspect
+what was chosen via `seg.resolved_predictors` after `fit`. Inferred numeric columns
+use `default_numeric_method` (default `"target"`, falling back gracefully if you
+prefer `"equal_frequency"`/`"equal_width"`).
+
 ## Expected output
 
 ### `seg.summary()`
@@ -173,8 +197,11 @@ A spec may be written as a bare method string when it takes no options, e.g.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `target` | — | Name of the KPI/target column. |
-| `predictors` | — | `{column: spec}` mapping (see [Binning methods](#binning-methods)). |
+| `predictors` | `None` | A `{column: spec}` dict, a list of column names (methods inferred from dtype), or `None` for full auto-select. See [Binning methods](#binning-methods) and [above](#you-dont-have-to-spell-out-every-predictor). |
 | `positive_class` | `None` | Event value for a binary target; `None` ⇒ continuous target. |
+| `default_numeric_method` | `"target"` | Binning method for auto-inferred numeric predictors (`target` / `equal_frequency` / `equal_width`). |
+| `default_bins` | `5` | Bin count for auto-inferred numeric predictors. |
+| `max_nominal_cardinality` | `20` | In full-auto mode, non-numeric columns with more distinct values are skipped. |
 | `max_depth` | `3` | Maximum tree depth. |
 | `min_child_node_size` | `30` | Minimum observations per child. Values in `(0, 1)` are treated as fractions of the dataset. |
 | `min_parent_node_size` | `None` | Minimum observations to split a node; defaults to `min_child_node_size`. Fractions supported. |

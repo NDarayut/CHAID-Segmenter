@@ -46,29 +46,53 @@ class ChaidSegmenter:
     ----------
     target : str
         Name of the KPI/target column.
-    predictors : dict
-        ``{column: spec}`` where ``spec`` is a binning spec dict (or method
-        string). Methods: ``target``, ``equal_width``, ``equal_frequency``,
-        ``manual``, ``nominal``. See :func:`chaid_segmenter.binning.make_binner`.
+    predictors : dict, list, or None
+        How to use the predictors. One of:
+
+        * ``dict`` -- ``{column: spec}`` where ``spec`` is a binning spec dict, a
+          method string (e.g. ``"nominal"``), or ``None``/``"auto"`` to infer the
+          method from the column dtype. Methods: ``target``, ``equal_width``,
+          ``equal_frequency``, ``manual``, ``nominal``
+          (see :func:`chaid_segmenter.binning.make_binner`).
+        * ``list`` -- column names; each method is inferred from its dtype.
+        * ``None`` -- auto-select every column except the target/weight, dropping
+          constant columns and high-cardinality text columns
+          (``max_nominal_cardinality``).
+
+        Inferred numeric columns use ``default_numeric_method``; non-numeric
+        columns become ``nominal``. The resolved mapping is available as
+        ``segmenter.resolved_predictors`` after ``fit``.
     positive_class : optional
         The event value of a binary target (e.g. ``1``). When given, the tree is
         categorical and node ``rate`` is ``P(target == positive_class)``. When
         ``None`` the target is treated as continuous and ``rate`` is the mean.
+    default_numeric_method : str
+        Binning method used for auto-inferred numeric predictors
+        (``target``, ``equal_frequency`` or ``equal_width``). Default ``target``.
+    default_bins : int
+        Bin count for auto-inferred numeric predictors (``max_bins`` for
+        ``target``, otherwise ``bins``). Default ``5``.
+    max_nominal_cardinality : int
+        In full-auto mode (``predictors=None``), non-numeric columns with more
+        than this many distinct values are skipped (IDs, names, free text).
     max_depth, min_child_node_size, min_parent_node_size, alpha_merge,
     split_threshold, max_splits, weight :
         Passed through to ``CHAID.Tree``. Node-size args accept fractions in
         ``(0, 1)``. ``min_parent_node_size`` defaults to ``min_child_node_size``.
     """
 
-    def __init__(self, target, predictors, positive_class=None, max_depth=3,
+    def __init__(self, target, predictors=None, positive_class=None, max_depth=3,
                  min_child_node_size=30, min_parent_node_size=None,
-                 alpha_merge=0.05, split_threshold=0, max_splits=None, weight=None):
-        if not predictors:
-            raise ValueError("At least one predictor must be supplied.")
+                 alpha_merge=0.05, split_threshold=0, max_splits=None, weight=None,
+                 default_numeric_method="target", default_bins=5,
+                 max_nominal_cardinality=20):
         self.target = target
         self.predictors = predictors
         self.positive_class = positive_class
         self.mode = "binary" if positive_class is not None else "continuous"
+        self.default_numeric_method = default_numeric_method
+        self.default_bins = default_bins
+        self.max_nominal_cardinality = max_nominal_cardinality
         self.max_depth = max_depth
         self.min_child_node_size = min_child_node_size
         self.min_parent_node_size = min_parent_node_size
@@ -77,6 +101,7 @@ class ChaidSegmenter:
         self.max_splits = max_splits
         self.weight = weight
 
+        self.resolved_predictors: Optional[Dict[str, object]] = None
         self.binners: Dict[str, object] = {}
         self.var_types: Dict[str, str] = {}
         self.tree: Optional[Tree] = None
@@ -94,6 +119,78 @@ class ChaidSegmenter:
             return self.min_child_node_size
         return self.min_parent_node_size
 
+    def _numeric_default_spec(self):
+        method = self.default_numeric_method
+        if method == "target":
+            return {"method": "target", "max_bins": self.default_bins}
+        if method in ("equal_width", "equal_frequency"):
+            return {"method": method, "bins": self.default_bins}
+        raise ValueError(
+            "default_numeric_method must be 'target', 'equal_frequency' or "
+            "'equal_width', got {!r}".format(method)
+        )
+
+    def _infer_spec(self, df, col):
+        series = df[col]
+        is_numeric = (pd.api.types.is_numeric_dtype(series)
+                      and not pd.api.types.is_bool_dtype(series))
+        return self._numeric_default_spec() if is_numeric else {"method": "nominal"}
+
+    def _resolve_predictors(self, df):
+        """Turn ``predictors`` (dict / list / None) into a concrete spec map."""
+        reserved = {self.target}
+        if self.weight is not None:
+            reserved.add(self.weight)
+
+        spec_map = {}
+        if self.predictors is None:
+            for col in df.columns:
+                if col in reserved:
+                    continue
+                series = df[col]
+                if series.nunique(dropna=True) <= 1:
+                    warnings.warn(
+                        "Auto-predictors: skipping constant/all-missing column "
+                        "{!r}.".format(col), stacklevel=2)
+                    continue
+                is_numeric = (pd.api.types.is_numeric_dtype(series)
+                              and not pd.api.types.is_bool_dtype(series))
+                if not is_numeric and series.nunique(dropna=True) > self.max_nominal_cardinality:
+                    warnings.warn(
+                        "Auto-predictors: skipping high-cardinality column {!r} "
+                        "({} distinct > max_nominal_cardinality={}).".format(
+                            col, series.nunique(dropna=True), self.max_nominal_cardinality),
+                        stacklevel=2)
+                    continue
+                spec_map[col] = self._infer_spec(df, col)
+        elif isinstance(self.predictors, dict):
+            for col, spec in self.predictors.items():
+                if col in reserved:
+                    warnings.warn(
+                        "Ignoring predictor {!r}: it is the target/weight column."
+                        .format(col), stacklevel=2)
+                    continue
+                spec_map[col] = self._infer_spec(df, col) if spec in (None, "auto") else spec
+        elif isinstance(self.predictors, (list, tuple, set)):
+            for col in self.predictors:
+                if col in reserved:
+                    warnings.warn(
+                        "Ignoring predictor {!r}: it is the target/weight column."
+                        .format(col), stacklevel=2)
+                    continue
+                spec_map[col] = self._infer_spec(df, col)
+        else:
+            raise TypeError(
+                "predictors must be a dict, a list of column names, or None; "
+                "got {}".format(type(self.predictors).__name__))
+
+        for col in spec_map:
+            if col not in df.columns:
+                raise KeyError("predictor {!r} not found in DataFrame.".format(col))
+        if not spec_map:
+            raise ValueError("No usable predictors were resolved.")
+        return spec_map
+
     # -- fitting ----------------------------------------------------------
     def fit(self, df):
         """Fit binners and build the CHAID tree from a pandas DataFrame."""
@@ -109,13 +206,13 @@ class ChaidSegmenter:
                     )
                 )
 
+        self.resolved_predictors = self._resolve_predictors(df)
+
         work = {}
         i_variables = {}
         self.binners, self.var_types = {}, {}
         target_vals = df[self.target].values
-        for col, spec in self.predictors.items():
-            if col not in df.columns:
-                raise KeyError("predictor {!r} not found in DataFrame.".format(col))
+        for col, spec in self.resolved_predictors.items():
             binner = make_binner(
                 spec, name=col, mode=self.mode, positive_class=self.positive_class
             )
@@ -136,15 +233,19 @@ class ChaidSegmenter:
         work_df = pd.DataFrame(work, index=df.index)
 
         dep_type = "categorical" if self.mode == "binary" else "continuous"
-        self.tree = Tree.from_pandas_df(
-            work_df, i_variables, self.target,
-            alpha_merge=self.alpha_merge, max_depth=self.max_depth,
-            min_parent_node_size=self._effective_min_parent(),
-            min_child_node_size=self.min_child_node_size,
-            split_threshold=self.split_threshold, weight=self.weight,
-            dep_variable_type=dep_type, max_splits=self.max_splits,
-        )
-        _ = self.tree.tree_store  # force build
+        # Binned columns carry NaN for missing values, which CHAID casts to its
+        # int "<missing>" sentinel -- numpy flags that cast as 'invalid value';
+        # it is expected and handled, so silence it around the tree build.
+        with np.errstate(invalid="ignore"):
+            self.tree = Tree.from_pandas_df(
+                work_df, i_variables, self.target,
+                alpha_merge=self.alpha_merge, max_depth=self.max_depth,
+                min_parent_node_size=self._effective_min_parent(),
+                min_child_node_size=self.min_child_node_size,
+                split_threshold=self.split_threshold, weight=self.weight,
+                dep_variable_type=dep_type, max_splits=self.max_splits,
+            )
+            _ = self.tree.tree_store  # force build
 
         root = self.tree.tree_store[0]
         self.root_total = metrics.node_population(root, weighted=self._weighted)
@@ -258,7 +359,7 @@ class ChaidSegmenter:
 
     # -- loaders ----------------------------------------------------------
     @classmethod
-    def from_csv(cls, path, target, predictors, *, read_csv_kwargs=None,
+    def from_csv(cls, path, target, predictors=None, *, read_csv_kwargs=None,
                  **segmenter_kwargs):
         """Read a CSV into a DataFrame, then construct and ``fit``."""
         df = pd.read_csv(path, **(read_csv_kwargs or {}))
@@ -266,7 +367,7 @@ class ChaidSegmenter:
         return seg.fit(df)
 
     @classmethod
-    def from_parquet(cls, path, target, predictors, *, read_parquet_kwargs=None,
+    def from_parquet(cls, path, target, predictors=None, *, read_parquet_kwargs=None,
                      **segmenter_kwargs):
         """Read a Parquet file into a DataFrame, then construct and ``fit``."""
         try:
