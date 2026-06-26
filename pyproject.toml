@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/NDarayut/CHAID-Package"
+Homepage = "https://github.com/NDarayut/CHAID-Segmenter"
 
 [tool.setuptools.packages.find]
 include = ["chaid_segmenter*", "CHAID*"]
