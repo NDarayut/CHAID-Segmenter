@@ -74,3 +74,5 @@ venv/
 
 # Generated example output
 dpd_tree.png
+loan_segments.png
+sample_loan_book.csv

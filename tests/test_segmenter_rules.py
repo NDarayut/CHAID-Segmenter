@@ -31,7 +31,7 @@ def test_nominal_multi_category_and_missing():
 def test_nominal_truncates_long_lists():
     cats = [str(i) for i in range(10)]
     out = render_nominal("region", cats, max_cats=3)
-    assert "+7 more" in out
+    assert "+7" in out
 
 
 def test_branch_label_uses_range_for_ordinal():

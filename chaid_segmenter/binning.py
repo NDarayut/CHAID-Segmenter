@@ -248,6 +248,117 @@ class TargetBinner(Binner):
         return splits[~np.isnan(splits)]
 
 
+class CategoricalTargetBinner(Binner):
+    """Supervised grouping of a high-cardinality categorical (e.g. a member/ID).
+
+    Uses :mod:`optbinning`'s categorical mode to group the categories into a few
+    *rate-ordered* bins, so a column with hundreds of distinct values (which plain
+    nominal CHAID can't handle well) becomes a handful of risk tiers. The bins are
+    monotonic in the target, so they are fed to CHAID as an ordinal column and only
+    contiguous (adjacent-risk) tiers merge.
+    """
+
+    def __init__(self, max_bins=8, mode="binary", positive_class=1, name=None):
+        super().__init__(name=name)
+        if max_bins < 1:
+            raise ValueError("max_bins must be >= 1, got {}".format(max_bins))
+        self.max_bins = max_bins
+        self.mode = mode
+        self.positive_class = positive_class
+        self.cat_to_code = {}
+        self.code_to_cats = {}
+        self._n_groups = 1
+
+    def _compute_edges(self, x, y=None):  # not used; categorical has no edges
+        return []
+
+    @property
+    def n_bins(self):
+        return max(self._n_groups, 1)
+
+    @staticmethod
+    def _is_na(v):
+        return v is None or (isinstance(v, float) and isnan(v))
+
+    def fit(self, x, y=None):
+        if y is None:
+            raise ValueError("CategoricalTargetBinner requires the target 'y' to fit.")
+        try:
+            from optbinning import ContinuousOptimalBinning, OptimalBinning
+        except ImportError as exc:  # pragma: no cover - exercised via message
+            raise ImportError(
+                "Target-based binning needs optbinning. Install it with "
+                "`pip install 'CHAID[segmenter-target]'` or `pip install optbinning`."
+            ) from exc
+
+        x_arr = np.asarray(x, dtype=object)
+        y_arr = np.asarray(y)
+        keep = np.array([not self._is_na(v) for v in x_arr])
+        x_fit = x_arr[keep].astype(str)
+        y_fit = y_arr[keep]
+        if x_fit.size and len(np.unique(x_fit)) > 1000:
+            warnings.warn(
+                "Column {!r} has very high cardinality ({} categories); supervised "
+                "grouping may be slow or overfit — is this a row identifier?".format(
+                    self.name, len(np.unique(x_fit))),
+                stacklevel=2,
+            )
+
+        if self.mode == "continuous":
+            ob = ContinuousOptimalBinning(name=str(self.name or "x"),
+                                          dtype="categorical", max_n_bins=self.max_bins)
+            ob.fit(x_fit, y_fit.astype(float))
+        else:
+            ob = OptimalBinning(name=str(self.name or "x"),
+                                dtype="categorical", max_n_bins=self.max_bins)
+            ob.fit(x_fit, (y_fit == self.positive_class).astype(int))
+
+        uniq = np.unique(x_fit)
+        raw = [int(c) for c in ob.transform(uniq, metric="indices")]
+        remap = {c: i for i, c in enumerate(sorted(set(raw)))}  # contiguous, rate-ordered
+        self.cat_to_code = {str(cat): remap[code] for cat, code in zip(uniq, raw)}
+        self.code_to_cats = {}
+        for cat, code in self.cat_to_code.items():
+            self.code_to_cats.setdefault(code, []).append(cat)
+        for code in self.code_to_cats:
+            self.code_to_cats[code] = sorted(self.code_to_cats[code])
+        self._n_groups = len(remap)
+        self.code_to_label = {c: self.range_label([c]) for c in self.code_to_cats}
+        if self._n_groups <= 1:
+            warnings.warn(
+                "Supervised grouping of {!r} produced a single group; it cannot "
+                "be split.".format(self.name), stacklevel=2)
+        return self
+
+    def transform(self, x):
+        x_arr = np.asarray(x, dtype=object)
+        out = np.full(len(x_arr), np.nan, dtype=float)
+        for i, v in enumerate(x_arr):
+            if self._is_na(v):
+                continue
+            code = self.cat_to_code.get(str(v))
+            if code is not None:
+                out[i] = float(code)
+        return out
+
+    def range_label(self, codes):
+        numeric, has_missing = self._split_missing(codes)
+        cats = []
+        for c in sorted(set(numeric)):
+            cats.extend(self.code_to_cats.get(c, []))
+        cats = sorted(set(cats))
+        if not cats:
+            return "is missing"
+        cap = 6
+        shown = ", ".join(cats[:cap])
+        if len(cats) > cap:
+            shown += ", +{}".format(len(cats) - cap)
+        fragment = "in {{{}}}".format(shown)
+        if has_missing:
+            fragment += " or missing"
+        return fragment
+
+
 class PassthroughNominal:
     """Marker for categorical predictors that bypass binning."""
 
@@ -257,13 +368,17 @@ class PassthroughNominal:
         self.name = name
 
 
-def make_binner(spec, name=None, mode="binary", positive_class=1):
+def make_binner(spec, name=None, mode="binary", positive_class=1, is_numeric=True):
     """Build a binner from a per-predictor spec dict.
 
     ``spec`` is ``{"method": "...", ...}`` where method is one of
     ``equal_width`` (``bins``), ``equal_frequency`` (``bins``), ``manual``
     (``edges``), ``target`` (``max_bins``, optional ``monotonic_trend``) or
-    ``nominal`` (passthrough).
+    ``nominal`` (passthrough). ``is_numeric`` selects, for ``target``, between
+    numeric optimal binning and categorical (high-cardinality) grouping; set
+    ``spec['categorical'] = True`` to force categorical grouping even for a numeric
+    column (e.g. an integer member/institution id that must not be binned as a
+    number).
     """
     if isinstance(spec, str):
         spec = {"method": spec}
@@ -279,9 +394,14 @@ def make_binner(spec, name=None, mode="binary", positive_class=1):
             raise ValueError("Manual binning for {!r} requires 'edges'.".format(name))
         return ManualBinner(edges=spec["edges"], name=name)
     if method == "target":
-        return TargetBinner(
-            max_bins=spec.get("max_bins", 5), mode=mode,
-            positive_class=positive_class,
-            monotonic_trend=spec.get("monotonic_trend", "auto"), name=name,
+        if is_numeric and not spec.get("categorical", False):
+            return TargetBinner(
+                max_bins=spec.get("max_bins", 5), mode=mode,
+                positive_class=positive_class,
+                monotonic_trend=spec.get("monotonic_trend", "auto"), name=name,
+            )
+        return CategoricalTargetBinner(
+            max_bins=spec.get("max_bins", 8), mode=mode,
+            positive_class=positive_class, name=name,
         )
     raise ValueError("Unknown binning method {!r} for column {!r}.".format(method, name))

@@ -134,7 +134,13 @@ class ChaidSegmenter:
         series = df[col]
         is_numeric = (pd.api.types.is_numeric_dtype(series)
                       and not pd.api.types.is_bool_dtype(series))
-        return self._numeric_default_spec() if is_numeric else {"method": "nominal"}
+        if is_numeric:
+            return self._numeric_default_spec()
+        # A high-cardinality categorical (e.g. a member/institution ID) is grouped
+        # by the target rather than left as hundreds of nominal categories.
+        if series.nunique(dropna=True) > self.max_nominal_cardinality:
+            return {"method": "target", "max_bins": 8}
+        return {"method": "nominal"}
 
     def _resolve_predictors(self, df):
         """Turn ``predictors`` (dict / list / None) into a concrete spec map."""
@@ -213,10 +219,20 @@ class ChaidSegmenter:
         self.binners, self.var_types = {}, {}
         target_vals = df[self.target].values
         for col, spec in self.resolved_predictors.items():
+            is_numeric = (pd.api.types.is_numeric_dtype(df[col])
+                          and not pd.api.types.is_bool_dtype(df[col]))
             binner = make_binner(
-                spec, name=col, mode=self.mode, positive_class=self.positive_class
+                spec, name=col, mode=self.mode, positive_class=self.positive_class,
+                is_numeric=is_numeric,
             )
             if isinstance(binner, PassthroughNominal):
+                n_cats = df[col].nunique(dropna=True)
+                if n_cats > 30:
+                    warnings.warn(
+                        "predictor {!r} is nominal with {} categories; CHAID will be "
+                        "slow and the splits unwieldy. Use {{'method': 'target'}} to "
+                        "group it by the target rate.".format(col, n_cats),
+                        stacklevel=2)
                 work[col] = df[col].values
                 i_variables[col] = "nominal"
                 self.var_types[col] = "nominal"

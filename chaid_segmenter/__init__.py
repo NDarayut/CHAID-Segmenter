@@ -11,6 +11,7 @@ A thin wrapper over the in-repo ``CHAID`` package that:
 """
 from .binning import (
     Binner,
+    CategoricalTargetBinner,
     EqualFrequencyBinner,
     EqualWidthBinner,
     ManualBinner,
@@ -28,6 +29,7 @@ __all__ = [
     "EqualFrequencyBinner",
     "ManualBinner",
     "TargetBinner",
+    "CategoricalTargetBinner",
     "PassthroughNominal",
     "make_binner",
 ]

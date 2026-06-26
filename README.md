@@ -172,7 +172,7 @@ Each predictor's `method` selects how it is turned into branches:
 
 | `method` | Spec keys | Description |
 |----------|-----------|-------------|
-| `target` | `max_bins` | Supervised optimal binning via [optbinning](https://github.com/guillermo-navas-palencia/optbinning) — monotonic event rate. Needs the `segmenter-target` extra. |
+| `target` | `max_bins` | Supervised optimal binning via [optbinning](https://github.com/guillermo-navas-palencia/optbinning) — monotonic event rate. Works on **numeric** columns (rate-ordered ranges) and on **high-cardinality categoricals** (groups categories into rate tiers). Needs the `segmenter-target` extra. |
 | `equal_width` | `bins` | Fixed-width intervals across the value range. |
 | `equal_frequency` | `bins` | Quantile bins of roughly equal population. |
 | `manual` | `edges` | User-supplied interior cut points. |
@@ -184,6 +184,30 @@ bins ever merge and every branch renders as a clean range (`age < 25`,
 
 A spec may be written as a bare method string when it takes no options, e.g.
 `"region": "nominal"`.
+
+### High-cardinality IDs (member / institution codes)
+
+A categorical with hundreds of distinct values — a member id, institution code,
+merchant id — can't be used as plain `nominal` (CHAID would try to merge hundreds
+of categories: slow and unreadable). Use `target` to **group it by the event rate**
+into a few risk tiers:
+
+```python
+predictors={"MEMBER_ID": "target", "PRODUCT_TYPE": "nominal", ...}
+```
+
+Segments then read like `MEMBER_ID in {003, 014, 019, 024, 045, 048, +11} → 40.7%`
+— a concrete high-risk member group. This also happens automatically when you simply
+**list** such a column (its cardinality exceeds `max_nominal_cardinality`); in
+**full-auto** mode (predictors omitted) high-cardinality columns are dropped instead,
+since the tool can't tell a meaningful id from a row identifier like `ACCOUNT_ID`.
+
+> **Numeric-looking ids.** Whether a column is binned as a *number* or grouped as a
+> *category* is decided from its **dtype**. An id like `001..200` read from a CSV
+> becomes `int64`, so it would be binned into meaningless ranges (`MEMBER_ID < 100`).
+> Either cast it to text — `df["MEMBER_ID"] = df["MEMBER_ID"].astype(str)` (or read with
+> `pd.read_csv(..., dtype={"MEMBER_ID": str})`) — or force grouping with
+> `{"method": "target", "categorical": True}`.
 
 ## Targets
 

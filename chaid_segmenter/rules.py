@@ -28,7 +28,7 @@ def render_nominal(variable, data, max_cats=None):
         parts.append("missing")
     if max_cats is not None and len(parts) > max_cats:
         shown = parts[:max_cats]
-        parts = shown + ["+{} more".format(len(parts) - max_cats)]
+        parts = shown + ["+{}".format(len(parts) - max_cats)]
     if len(parts) == 1:
         return "{} = {}".format(variable, parts[0])
     return "{} in {{{}}}".format(variable, ", ".join(parts))
@@ -56,6 +56,6 @@ def describe_rules(rules, binners):
     return description, structured
 
 
-def branch_label(variable, choices, binner, max_cats=4):
+def branch_label(variable, choices, binner, max_cats=3):
     """Compact label for the branch leading into a child node."""
     return render_predicate(variable, choices, binner, max_cats=max_cats)
