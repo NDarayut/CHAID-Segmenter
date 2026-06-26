@@ -148,7 +148,7 @@ top.rules           # [{'variable': 'age', 'label': 'age < 24.9859', 'data': [..
 Each node shows its population (count + % of total) and rate; each branch is
 labelled with the choice that leads into it; node colour encodes the rate:
 
-![CHAID segmentation tree](docs/segmentation_example.png)
+![CHAID segmentation tree](https://raw.githubusercontent.com/NDarayut/CHAID-Package/main/docs/segmentation_example.png)
 
 ### `seg.predict(df, with_rate=True)`
 
