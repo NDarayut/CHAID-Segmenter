@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chaid-segmenter"
-version = "0.1.1"
+version = "0.1.2"
 description = "Population segmentation using CHAID decision trees with automatic predictor binning"
 readme = "README.md"
 license = { text = "Apache-2.0" }
