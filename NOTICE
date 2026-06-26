@@ -1,0 +1,17 @@
+CHAID Segmentation
+==================
+
+This product bundles a copy of CHAID (the `CHAID/` package), a Python
+implementation of the Chi-Squared Automatic Interaction Detection decision tree:
+
+    CHAID
+    Copyright Mark Ramotowski, Richard Fitzgerald, and CHAID contributors
+    https://github.com/Rambatino/CHAID
+    Licensed under the Apache License, Version 2.0 (see LICENSE.txt).
+
+The bundled CHAID source under `CHAID/` is included without modification and is
+used as the underlying tree-building engine.
+
+The `chaid_segmenter/` package — automatic predictor binning, KPI segmentation,
+and the matplotlib/seaborn visualisation built on top of CHAID — is an original
+addition and is likewise distributed under the Apache License, Version 2.0.

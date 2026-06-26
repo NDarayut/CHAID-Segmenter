@@ -13,7 +13,9 @@ high/low segments of the customer base."* For example, for a `90+DPD` target:
 > **age < 25 AND region = Phnom Penh AND bank = ABA → 60% 90+DPD rate, 10% of population, 2.5x lift**
 
 The CHAID tree engine is **bundled in this repository** — there is no external
-`CHAID` dependency to install.
+`CHAID` dependency to install. It is based on the
+[Rambatino/CHAID](https://github.com/Rambatino/CHAID) project (Apache 2.0); see
+[Credits & License](#credits--license).
 
 ## Features
 
@@ -251,6 +253,13 @@ pip install -e '.[segmenter-target,parquet,test]'
 pytest tests/
 ```
 
-## License
+## Credits & License
 
-Apache License 2.0 — see [LICENSE.txt](LICENSE.txt) for details.
+This project is built on top of [**CHAID**](https://github.com/Rambatino/CHAID)
+by Mark Ramotowski, Richard Fitzgerald and contributors. The `CHAID/` package in
+this repository is that upstream implementation, **bundled unmodified** as the
+underlying tree engine. The `chaid_segmenter/` package — automatic binning, KPI
+segmentation and the matplotlib/seaborn visualisation — is an original addition.
+
+Distributed under the **Apache License 2.0**. See [LICENSE.txt](LICENSE.txt) for
+the full license text and [NOTICE](NOTICE) for attribution.
